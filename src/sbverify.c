@@ -278,6 +278,11 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
+	if (verbose) {
+		printf("Image checksum regions:\n");
+		image_print_regions(image);
+	}
+
 	if (detached_sig_filename)
 		rc = load_detached_signature_data(image, detached_sig_filename,
 				&sig_buf, &sig_size);

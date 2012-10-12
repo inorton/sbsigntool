@@ -110,6 +110,7 @@ int image_add_signature(struct image *, void *sig, int size);
 void image_remove_signature(struct image *image);
 int image_write(struct image *image, const char *filename);
 int image_write_detached(struct image *image, const char *filename);
+void image_print_regions(struct image *image);
 
 #endif /* IMAGE_H */
 

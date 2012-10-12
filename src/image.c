@@ -456,13 +456,6 @@ int image_hash_sha256(struct image *image, uint8_t digest[])
 	for (i = 0; i < image->n_checksum_regions; i++) {
 		region = &image->checksum_regions[i];
 		n += region->size;
-#if 0
-		printf("sum region: 0x%04lx -> 0x%04lx [0x%04x bytes]\n",
-				region->data - image->buf,
-				region->data - image->buf - 1 + region->size,
-				region->size);
-
-#endif
 		rc = SHA256_Update(&ctx, region->data, region->size);
 		if (!rc)
 			return -1;
@@ -471,6 +464,24 @@ int image_hash_sha256(struct image *image, uint8_t digest[])
 	rc = SHA256_Final(digest, &ctx);
 
 	return !rc;
+}
+
+void image_print_regions(struct image *image)
+{
+	struct region *region;
+	void *buf;
+	int i;
+
+	for (i = 0; i < image->n_checksum_regions; i++) {
+		region = &image->checksum_regions[i];
+		buf = image->buf;
+
+		printf("sum region  0x%04lx -> 0x%04lx [0x%04x bytes] %s\n",
+				region->data - buf,
+				region->data - buf - 1 + region->size,
+				region->size,
+				region->name);
+	}
 }
 
 int image_add_signature(struct image *image, void *sig, int size)

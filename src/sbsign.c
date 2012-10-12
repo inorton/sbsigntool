@@ -194,6 +194,11 @@ int main(int argc, char **argv)
 
 	const EVP_MD *md = EVP_get_digestbyname("SHA256");
 
+	if (ctx->verbose) {
+		printf("Image checksum regions:\n");
+		image_print_regions(ctx->image);
+	}
+
 	/* set up the PKCS7 object */
 	PKCS7 *p7 = PKCS7_new();
 	PKCS7_set_type(p7, NID_pkcs7_signed);

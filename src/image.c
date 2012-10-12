@@ -228,8 +228,9 @@ static int image_pecoff_parse(struct image *image)
 	if (cert_table && cert_table->revision == CERT_TABLE_REVISION &&
 			cert_table->type == CERT_TABLE_TYPE_PKCS &&
 			cert_table->size < size) {
-		image->sigsize = cert_table->size;
-		image->sigbuf = talloc_memdup(image, cert_table + 1,
+		image->sigsize = cert_table->size - sizeof(*cert_table);
+		image->sigbuf = talloc_memdup(image,
+				(void *)(cert_table) + sizeof(*cert_table),
 				image->sigsize);
 	}
 

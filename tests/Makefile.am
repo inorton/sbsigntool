@@ -55,6 +55,7 @@ TESTS = sign-verify.sh \
 	cert-table-header.sh \
 	resign-warning.sh \
 	reattach-warning.sh \
+	reattach-size.sh \
 	detach-remove.sh
 
 TEST_EXTENSIONS = .sh

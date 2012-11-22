@@ -226,12 +226,15 @@ int main(int argc, char **argv)
 	i2d_PKCS7(p7, &tmp);
 	ERR_print_errors_fp(stdout);
 
-	image_add_signature(ctx->image, buf, sigsize);
+	ctx->image->sigbuf = buf;
+	ctx->image->sigsize = sigsize;
 
-	if (ctx->detached)
+	if (ctx->detached) {
 		image_write_detached(ctx->image, ctx->outfilename);
-	else
+	} else {
+		image_add_signature(ctx->image, buf, sigsize);
 		image_write(ctx->image, ctx->outfilename);
+	}
 
 	talloc_free(ctx);
 

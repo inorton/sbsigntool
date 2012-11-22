@@ -53,7 +53,9 @@
 #include <openssl/err.h>
 
 #include "fileio.h"
+#include "guid.h"
 #include "efivars.h"
+#include "sigdb.h"
 
 #define EFIVARS_MOUNTPOINT	"/sys/firmware/efi/efivars"
 #define PSTORE_FSTYPE		0x6165676C
@@ -156,18 +158,6 @@ struct sync_context {
 };
 
 
-#define GUID_STRLEN (8 + 1 + 4 + 1 + 4 + 1 + 4 + 1 + 12 + 1)
-static void guid_to_str(const EFI_GUID *guid, char *str)
-{
-	snprintf(str, GUID_STRLEN,
-		"%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-			guid->Data1, guid->Data2, guid->Data3,
-			guid->Data4[0], guid->Data4[1],
-			guid->Data4[2], guid->Data4[3],
-			guid->Data4[4], guid->Data4[5],
-			guid->Data4[6], guid->Data4[7]);
-}
-
 static int sha256_key_parse(struct key *key, uint8_t *data, size_t len)
 {
 	const unsigned int sha256_id_size = 256 / 8;
@@ -251,64 +241,6 @@ static int key_parse(struct key *key, const EFI_GUID *type,
 			guid_str);
 	return -1;
 
-}
-
-typedef int (*sigdata_fn)(EFI_SIGNATURE_DATA *, int, const EFI_GUID *, void *);
-
-/**
- * Iterates an buffer of EFI_SIGNATURE_LISTs (at db_data, of length len),
- * and calls fn on each EFI_SIGNATURE_DATA item found.
- *
- * fn is passed the EFI_SIGNATURE_DATA pointer, and the length of the
- * signature data (including GUID header), the type of the signature list,
- * and a context pointer.
- */
-static int sigdb_iterate(void *db_data, size_t len,
-		sigdata_fn fn, void *arg)
-{
-	EFI_SIGNATURE_LIST *siglist;
-	EFI_SIGNATURE_DATA *sigdata;
-	unsigned int i, j;
-	int rc = 0;
-
-	if (len == 0)
-		return 0;
-
-	if (len < sizeof(*siglist))
-		return -1;
-
-	for (i = 0, siglist = db_data + i;
-			i + sizeof(*siglist) <= len &&
-			i + siglist->SignatureListSize > i &&
-			i + siglist->SignatureListSize <= len && !rc;
-			i += siglist->SignatureListSize,
-			siglist = db_data + i) {
-
-		/* ensure that the header & sig sizes are sensible */
-		if (siglist->SignatureHeaderSize > siglist->SignatureListSize)
-			continue;
-
-		if (siglist->SignatureSize > siglist->SignatureListSize)
-			continue;
-
-		if (siglist->SignatureSize < sizeof(*sigdata))
-			continue;
-
-		/* iterate through the (constant-sized) signature data blocks */
-		for (j = sizeof(*siglist) + siglist->SignatureHeaderSize;
-				j < siglist->SignatureListSize && !rc;
-				j += siglist->SignatureSize)
-		{
-			sigdata = (void *)(siglist) + j;
-
-			rc = fn(sigdata, siglist->SignatureSize,
-					&siglist->SignatureType, arg);
-
-		}
-
-	}
-
-	return rc;
 }
 
 struct keydb_add_ctx {

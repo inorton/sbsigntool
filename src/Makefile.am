@@ -9,6 +9,10 @@ common_SOURCES = idc.c idc.h image.c image.h fileio.c fileio.h \
 common_LDADD = ../lib/ccan/libccan.a $(libcrypto_LIBS)
 common_CFLAGS = -I$(top_srcdir)/lib/ccan/
 
+sigdb_SOURCES = sigdb.h sigdb.c
+
+guid_SOURCES = guid.h
+
 sbsign_SOURCES = sbsign.c $(common_SOURCES)
 sbsign_LDADD = $(common_LDADD)
 sbsign_CFLAGS = $(AM_CFLAGS) $(common_CFLAGS)
@@ -31,7 +35,8 @@ sbsiglist_LDADD = $(common_LDADD) $(uuid_LIBS)
 sbsiglist_CPPFLAGS = $(EFI_CPPFLAGS)
 sbsiglist_CFLAGS = $(AM_CFLAGS) $(common_CFLAGS)
 
-sbkeysync_SOURCES = sbkeysync.c $(common_SOURCES)
+sbkeysync_SOURCES = sbkeysync.c $(common_SOURCES) $(sigdb_SOURCES) \
+		    $(guid_SOURCES)
 sbkeysync_LDADD = $(common_LDADD) $(uuid_LIBS)
 sbkeysync_CPPFLAGS = $(EFI_CPPFLAGS)
 sbkeysync_CFLAGS = $(AM_CFLAGS) $(common_CFLAGS)

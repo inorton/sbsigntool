@@ -38,6 +38,8 @@
 
 #include <getopt.h>
 
+#include <openssl/x509.h>
+
 #include <ccan/array_size/array_size.h>
 #include <ccan/talloc/talloc.h>
 
@@ -114,9 +116,35 @@ static void save_data_external(struct sigdb_context *ctx,
 		printf("  [ data saved to file %s ]\n", filename);
 }
 
+static void print_save_x509(struct sigdb_context *ctx,
+		struct cert_type *type,
+		int idx, void *data, size_t size)
+{
+	const uint8_t *tmp;
+	X509 *x509;
+
+	tmp = data;
+
+	x509 = d2i_X509(NULL, &tmp, size);
+	if (!x509) {
+		fprintf(stderr, "can't parse x509 data\n");
+		return;
+	}
+
+	printf("  x509 subject:\n");
+	X509_NAME_print_ex_fp(stdout, x509->cert_info->subject, 4,
+			XN_FLAG_MULTILINE);
+	printf("\n");
+	printf("  x509 issuer:\n");
+	X509_NAME_print_ex_fp(stdout, x509->cert_info->issuer, 4,
+			XN_FLAG_MULTILINE);
+	printf("\n");
+
+	save_data_external(ctx, type, idx, data, size);
+}
 
 struct cert_type cert_types[] = {
-	{ "x509",   EFI_CERT_X509_GUID,   save_data_external },
+	{ "x509",   EFI_CERT_X509_GUID,   print_save_x509 },
 	{ "sha256", EFI_CERT_SHA256_GUID, print_hex_data },
 };
 

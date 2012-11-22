@@ -52,6 +52,7 @@ static const char *toolname = "sbsigdb";
 
 static struct option options[] = {
 	{ "efivarfs-header", no_argument, NULL, 'e' },
+	{ "dump-certs", no_argument, NULL, 'd' },
 	{ "help", no_argument, NULL, 'h' },
 	{ "version", no_argument, NULL, 'V' },
 	{ NULL, 0, NULL, 0 },
@@ -61,7 +62,7 @@ struct cert_type;
 struct sigdb_context;
 
 typedef void (*certdata_print_fn)(struct sigdb_context *ctx,
-		struct cert_type *type, int idx, void *data, size_t size);
+		void *data, size_t size);
 
 struct cert_type {
 	const char		*name;
@@ -73,6 +74,8 @@ struct sigdb_context {
 	const char	*filename;
 	const char	*basename;
 
+	bool		dump_files;
+
 	int		idx;
 
 	uint8_t		*buf;
@@ -80,10 +83,7 @@ struct sigdb_context {
 };
 
 
-static void print_hex_data(struct sigdb_context *ctx,
-		struct cert_type *type __attribute__((unused)),
-		int idx __attribute__((unused)),
-		void *data, size_t size)
+static void print_hex_data(struct sigdb_context *ctx, void *data, size_t size)
 {
 	int width = strlen("00");
 	unsigned int i;
@@ -98,27 +98,8 @@ static void print_hex_data(struct sigdb_context *ctx,
 	printf("    %s\n", buf);
 }
 
-static void save_data_external(struct sigdb_context *ctx,
-		struct cert_type *type,
-		int idx, void *data, size_t size)
-{
-	char * filename;
-	int rc;
-
-	filename = talloc_asprintf(ctx, "%s.%d.%s",
-			ctx->basename, idx, type ? type->name : "bin");
-
-	rc = fileio_write_file(filename, data, size);
-
-	if (rc)
-		fprintf(stderr, "error saving to file %s\n", filename);
-	else
-		printf("  [ data saved to file %s ]\n", filename);
-}
-
-static void print_save_x509(struct sigdb_context *ctx,
-		struct cert_type *type,
-		int idx, void *data, size_t size)
+static void print_x509(struct sigdb_context *ctx __attribute__((unused)),
+		void *data, size_t size)
 {
 	const uint8_t *tmp;
 	X509 *x509;
@@ -139,12 +120,31 @@ static void print_save_x509(struct sigdb_context *ctx,
 	X509_NAME_print_ex_fp(stdout, x509->cert_info->issuer, 4,
 			XN_FLAG_MULTILINE);
 	printf("\n");
-
-	save_data_external(ctx, type, idx, data, size);
 }
 
+static void dump_cert_data(struct sigdb_context *ctx,
+		struct cert_type *type,
+		int idx, void *data, size_t size)
+{
+	char *filename;
+	int rc;
+
+	filename = talloc_asprintf(ctx, "%s.%d.%s",
+			ctx->basename, idx, type ? type->name : "bin");
+
+	rc = fileio_write_file(filename, data, size);
+
+	if (rc)
+		fprintf(stderr, "error saving to file %s\n", filename);
+	else
+		printf("  [ data saved to file %s ]\n", filename);
+
+	talloc_free(filename);
+}
+
+
 struct cert_type cert_types[] = {
-	{ "x509",   EFI_CERT_X509_GUID,   print_save_x509 },
+	{ "x509",   EFI_CERT_X509_GUID,   print_x509 },
 	{ "sha256", EFI_CERT_SHA256_GUID, print_hex_data },
 };
 
@@ -153,7 +153,10 @@ void usage(void)
 	printf("Usage: %s [options] <sigdb-file>\n"
 		"Prints the contents of an EFI signature database"
 		"Options:\n"
-		"\t--efivarfs-header  Skip 4-byte efivarfs header\n",
+		"\t--efivarfs-header  Skip 4-byte efivarfs header\n"
+		"\t--dump-certs       Dump certificates to file(s)\n"
+		"\t                   (named as <file>.<n>.<type>, in the\n"
+		"\t                   current directory)\n",
 		toolname);
 }
 
@@ -213,10 +216,12 @@ static int print_sigdb_entry(EFI_SIGNATURE_DATA *data, int size,
 	guid_to_str(&data->SignatureOwner, guid_str);
 	printf("  owner: %s\n", guid_str);
 
-	if (type && type->print_fn) {
-		type->print_fn(ctx, type, ctx->idx, data->SignatureData,
+	if (type && type->print_fn)
+		type->print_fn(ctx, data->SignatureData, data_size);
+
+	if (ctx->dump_files)
+		dump_cert_data(ctx, type, ctx->idx, data->SignatureData,
 				data_size);
-	}
 
 	printf("\n");
 
@@ -234,6 +239,7 @@ int main(int argc, char **argv)
 	skip_efivarfs_header = false;
 
 	ctx = talloc_zero(NULL, struct sigdb_context);
+	ctx->dump_files = false;
 
 	for (;;) {
 		int idx;
@@ -244,6 +250,9 @@ int main(int argc, char **argv)
 		switch (c) {
 		case 'e':
 			skip_efivarfs_header = true;
+			break;
+		case 'd':
+			ctx->dump_files = true;
 			break;
 		case 'V':
 			version();

@@ -733,10 +733,17 @@ int image_add_signature(struct image *image, void *sig, unsigned int size)
 
 void image_remove_signature(struct image *image)
 {
-	if (image->sigbuf)
-		talloc_free(image->sigbuf);
-	image->sigbuf = NULL;
-	image->sigsize = 0;
+	struct data_dir_entry *data_dir_entry;
+	unsigned int new_size;
+
+	data_dir_entry = image_data_dir_cert_table(image);
+
+	new_size = image->size - data_dir_entry->size;
+
+	data_dir_entry->addr = 0;
+	data_dir_entry->size = 0;
+
+	image->size = new_size;
 }
 
 int image_write(struct image *image, const char *filename)

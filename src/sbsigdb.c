@@ -74,7 +74,7 @@ struct sigdb_context {
 	const char	*filename;
 	const char	*basename;
 
-	bool		dump_files;
+	bool		dump_certs;
 
 	int		idx;
 
@@ -219,7 +219,7 @@ static int print_sigdb_entry(EFI_SIGNATURE_DATA *data, int size,
 	if (type && type->print_fn)
 		type->print_fn(ctx, data->SignatureData, data_size);
 
-	if (ctx->dump_files)
+	if (ctx->dump_certs)
 		dump_cert_data(ctx, type, ctx->idx, data->SignatureData,
 				data_size);
 
@@ -239,7 +239,7 @@ int main(int argc, char **argv)
 	skip_efivarfs_header = false;
 
 	ctx = talloc_zero(NULL, struct sigdb_context);
-	ctx->dump_files = false;
+	ctx->dump_certs = false;
 
 	for (;;) {
 		int idx;
@@ -252,7 +252,7 @@ int main(int argc, char **argv)
 			skip_efivarfs_header = true;
 			break;
 		case 'd':
-			ctx->dump_files = true;
+			ctx->dump_certs = true;
 			break;
 		case 'V':
 			version();
@@ -284,6 +284,9 @@ int main(int argc, char **argv)
 		ctx->buf += sizeof(uint32_t);
 
 	sigdb_iterate(ctx->buf, ctx->size, print_sigdb_entry, ctx);
+
+	if (ctx->idx == 0)
+		printf("No certificate data found\n");
 
 	rc = EXIT_SUCCESS;
 out:

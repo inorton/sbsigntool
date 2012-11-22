@@ -101,6 +101,7 @@ void usage(void)
 
 	printf("Usage: %s [options] --owner <guid> --type <type> <sig-file>\n"
 		"Create an EFI_SIGNATURE_LIST from a signature file\n"
+		"\n"
 		"Options:\n"
 		"\t--owner <guid>   Signature owner GUID\n"
 		"\t--type <type>    Signature type. One of:\n",

@@ -151,7 +151,8 @@ struct cert_type cert_types[] = {
 void usage(void)
 {
 	printf("Usage: %s [options] <sigdb-file>\n"
-		"Prints the contents of an EFI signature database"
+		"Prints the contents of an EFI signature database.\n"
+		"\n"
 		"Options:\n"
 		"\t--efivarfs-header  Skip 4-byte efivarfs header\n"
 		"\t--dump-certs       Dump certificates to file(s)\n"

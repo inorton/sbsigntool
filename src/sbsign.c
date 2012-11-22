@@ -178,6 +178,9 @@ int main(int argc, char **argv)
 	if (!ctx->image)
 		return EXIT_FAILURE;
 
+	if (image_signature(ctx->image, NULL, NULL) == 0 && !ctx->detached)
+		fprintf(stderr, "warning: overwriting existing signature\n");
+
 	talloc_steal(ctx, ctx->image);
 
 	ERR_load_crypto_strings();

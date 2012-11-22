@@ -227,11 +227,13 @@ int main(int argc, char **argv)
 
 	rc = 0;
 
-	if (action == ACTION_ATTACH)
+	if (action == ACTION_ATTACH) {
+		fprintf(stderr, "warning: overwriting existing signature\n");
 		rc = attach_sig(image, image_filename, sig_filename);
 
-	else if (action == ACTION_DETACH)
+	} else if (action == ACTION_DETACH) {
 		rc = detach_sig(image, sig_filename);
+	}
 
 	if (rc)
 		goto out;

@@ -545,6 +545,20 @@ static int image_find_regions(struct image *image,
 	return 0;
 }
 
+static void image_find_signature(struct image *image)
+{
+	size_t size;
+	void *sig;
+	int rc;
+
+	rc = image_signature(image, &sig, &size);
+	if (rc)
+		return;
+
+	image->sigsize = size;
+	image->sigbuf = talloc_memdup(image, sig, size);
+}
+
 struct image *image_load(const char *filename)
 {
 	unsigned int data_size;
@@ -585,6 +599,8 @@ struct image *image_load(const char *filename)
 		memset(image->buf + image->size, 0, data_size - image->size);
 		image->size = data_size;
 	}
+
+	image_find_signature(image);
 
 	return image;
 err:

@@ -41,39 +41,38 @@
 #include "coff/pe.h"
 
 struct region {
-	void	*data;
-	int	size;
-	char	*name;
+	unsigned int	offset;
+	unsigned int	size;
+	char		*name;
 };
 
 struct image {
-	uint8_t		*buf;
+	void		*buf;
 	size_t		size;
 
-	/* size of the image, without signature */
-	size_t		data_size;
+	/* Offsets to interesting parts of the image, calculated during
+	 * image parse */
+	unsigned int	pehdr_offset,
+			checksum_offset,
+			data_dir_offset,
+			cert_table_offset;
 
-	/* Pointers to interesting parts of the image */
-	uint32_t	*checksum;
-	struct external_PEI_DOS_hdr *doshdr;
-	struct external_PEI_IMAGE_hdr *pehdr;
-	union	{
-		PEPAOUTHDR	*opt_64;
-		PEAOUTHDR	*opt_32;
-		void		*addr;
-	} opthdr;
 	/* size of a minimal opthdr for this machine, without data
 	 * directories */
 	unsigned int	opthdr_min_size;
 	/* size of the opthdr as specified by the image */
 	unsigned int	opthdr_size;
+
+	unsigned int	sections;
+	unsigned int	cert_table_size;
+#if 0
+	uint32_t	*checksum;
+	struct external_PEI_DOS_hdr *doshdr;
+	struct external_PEI_IMAGE_hdr *pehdr;
 	struct data_dir_entry *data_dir;
 	struct data_dir_entry *data_dir_sigtable;
 	struct external_scnhdr *scnhdr;
-	int		sections;
-
-	void		*cert_table;
-	int		cert_table_size;
+#endif
 
 	/* We cache a few values from the aout header, so we don't have to
 	 * keep checking whether to use the 32- or 64-bit version */
@@ -92,6 +91,12 @@ struct image {
 
 };
 
+union	{
+	PEPAOUTHDR	*opt_64;
+	PEAOUTHDR	*opt_32;
+	void		*addr;
+} opthdr;
+
 struct data_dir_entry {
 	uint32_t	addr;
 	uint32_t	size;
@@ -104,10 +109,12 @@ struct cert_table_header {
 } __attribute__((packed));
 
 struct image *image_load(const char *filename);
+void image_pad_for_signing(struct image *image);
 
 int image_hash_sha256(struct image *image, uint8_t digest[]);
-int image_add_signature(struct image *, void *sig, int size);
+int image_add_signature(struct image *, void *sig, unsigned int size);
 void image_remove_signature(struct image *image);
+int image_signature(struct image *image, void **buf, size_t *size);
 int image_write(struct image *image, const char *filename);
 int image_write_detached(struct image *image, const char *filename);
 void image_print_regions(struct image *image);

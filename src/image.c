@@ -30,6 +30,7 @@
  * also delete it here.
  */
 
+#include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/types.h>
@@ -46,6 +47,8 @@
 
 #include "fileio.h"
 #include "image.h"
+
+#define IMAGE_ALIGN		8
 
 #define DATA_DIR_CERT_TABLE	4
 
@@ -78,6 +81,90 @@ static uint16_t __pehdr_u16(char field[])
 #define pehdr_u32(f) __pehdr_u32(f + BUILD_ASSERT_OR_ZERO(sizeof(f) == 4))
 #define pehdr_u16(f) __pehdr_u16(f + BUILD_ASSERT_OR_ZERO(sizeof(f) == 2))
 
+/* accessors for interesting parts of the image */
+static struct external_PEI_DOS_hdr *image_doshdr(struct image *image)
+{
+	return image->buf;
+}
+
+static struct external_PEI_IMAGE_hdr *image_pehdr(struct image *image)
+{
+	return image->buf + image->pehdr_offset;
+}
+
+static int image_opthdr_offset(struct image *image)
+{
+	return image->pehdr_offset + sizeof(struct external_PEI_IMAGE_hdr);
+}
+
+static int image_data_dir_cert_table_offset(struct image *image)
+{
+	return image->data_dir_offset +
+		DATA_DIR_CERT_TABLE * sizeof(struct data_dir_entry);
+
+}
+
+static struct data_dir_entry *image_data_dir_cert_table(
+		struct image *image)
+{
+	return image->buf + image_data_dir_cert_table_offset(image);
+}
+
+static int image_scnhdr_offset(struct image *image)
+{
+	return image_opthdr_offset(image) + image->opthdr_size;
+}
+
+static struct external_scnhdr *image_scnhdr(struct image *image)
+{
+	return image->buf + image_scnhdr_offset(image);
+}
+
+static unsigned int image_data_size(struct image *image)
+{
+	struct data_dir_entry *entry = image_data_dir_cert_table(image);
+	return image->size - entry->size;
+}
+
+static struct cert_table_header *image_cert_table(struct image *image)
+{
+	struct cert_table_header *cert_table;
+	struct data_dir_entry *cert_table_dir =
+		image_data_dir_cert_table(image);
+
+	if (cert_table_dir->size == 0)
+		return NULL;
+
+	if (cert_table_dir->addr + cert_table_dir->size > image->size) {
+		fprintf(stderr, "error: invalid signature table reference "
+				"in data directory\n");
+		return NULL;
+	}
+
+	cert_table = image->buf + cert_table_dir->addr;
+	if (cert_table->size > cert_table_dir->size) {
+		fprintf(stderr, "error: invalid certificate table header\n");
+		return NULL;
+	}
+
+	return cert_table;
+}
+
+int image_signature(struct image *image, void **sig, size_t *size)
+{
+	struct cert_table_header *cert_table = image_cert_table(image);
+
+	if (!cert_table)
+		return -1;
+
+	if (sig)
+		*sig = cert_table + 1;
+	if (size)
+		*size = cert_table->size;
+
+	return 0;
+}
+
 /* Machine-specific PE/COFF parse functions. These parse the relevant a.out
  * header for the machine type, and set the following members of struct image:
  *   - aouthdr_size
@@ -86,47 +173,51 @@ static uint16_t __pehdr_u16(char field[])
  *   - data_dir
  *   - checksum
  *
- *  These functions require image->opthdr to be set by the caller.
+ *  These functions require image->pehdr_offset to be set by the caller.
  */
 static int image_pecoff_parse_32(struct image *image)
 {
-	if (image->opthdr.opt_32->standard.magic[0] != 0x0b ||
-			image->opthdr.opt_32->standard.magic[1] != 0x01) {
+	unsigned int opthdr_offset = image_opthdr_offset(image);
+	PEAOUTHDR *opt_32 = image->buf + opthdr_offset;
+
+	if (opt_32->standard.magic[0] != 0x0b ||
+			opt_32->standard.magic[1] != 0x01) {
 		fprintf(stderr, "Invalid a.out machine type\n");
 		return -1;
 	}
 
-	image->opthdr_min_size = sizeof(*image->opthdr.opt_32) -
-				sizeof(image->opthdr.opt_32->DataDirectory);
+	image->opthdr_min_size = sizeof(*opt_32) -
+				sizeof(opt_32->DataDirectory);
 
-	image->file_alignment =
-		pehdr_u32(image->opthdr.opt_32->FileAlignment);
-	image->header_size =
-		pehdr_u32(image->opthdr.opt_32->SizeOfHeaders);
+	image->file_alignment =	pehdr_u32(opt_32->FileAlignment);
+	image->header_size = pehdr_u32(opt_32->SizeOfHeaders);
 
-	image->data_dir = (void *)image->opthdr.opt_32->DataDirectory;
-	image->checksum = (uint32_t *)image->opthdr.opt_32->CheckSum;
+	image->checksum_offset = opthdr_offset + offsetof(PEAOUTHDR, CheckSum);
+	image->data_dir_offset = opthdr_offset +
+					offsetof(PEAOUTHDR, DataDirectory);
 	return 0;
 }
 
 static int image_pecoff_parse_64(struct image *image)
 {
-	if (image->opthdr.opt_64->standard.magic[0] != 0x0b ||
-			image->opthdr.opt_64->standard.magic[1] != 0x02) {
+	unsigned int opthdr_offset = image_opthdr_offset(image);
+	PEPAOUTHDR *opt_64 = image->buf + opthdr_offset;
+
+	if (opt_64->standard.magic[0] != 0x0b ||
+			opt_64->standard.magic[1] != 0x02) {
 		fprintf(stderr, "Invalid a.out machine type\n");
 		return -1;
 	}
 
-	image->opthdr_min_size = sizeof(*image->opthdr.opt_64) -
-				sizeof(image->opthdr.opt_64->DataDirectory);
+	image->opthdr_min_size = sizeof(*opt_64) -
+				sizeof(opt_64->DataDirectory);
 
-	image->file_alignment =
-		pehdr_u32(image->opthdr.opt_64->FileAlignment);
-	image->header_size =
-		pehdr_u32(image->opthdr.opt_64->SizeOfHeaders);
+	image->file_alignment =	pehdr_u32(opt_64->FileAlignment);
+	image->header_size = pehdr_u32(opt_64->SizeOfHeaders);
 
-	image->data_dir = (void *)image->opthdr.opt_64->DataDirectory;
-	image->checksum = (uint32_t *)image->opthdr.opt_64->CheckSum;
+	image->checksum_offset = opthdr_offset + offsetof(PEPAOUTHDR, CheckSum);
+	image->data_dir_offset = opthdr_offset +
+					offsetof(PEPAOUTHDR, DataDirectory);
 	return 0;
 }
 
@@ -150,87 +241,85 @@ static uint16_t csum_bytes(uint16_t checksum, void *buf, size_t len)
 	return checksum;
 }
 
-static void image_pecoff_update_checksum(struct image *image,
-                                        struct cert_table_header *cert_table)
+static void image_pecoff_update_checksum(struct image *image)
 {
-	bool is_signed = image->sigsize && image->sigbuf;
 	uint32_t checksum;
 
-	/* We carefully only include the signature data in the checksum (and
-	 * in the file length) if we're outputting the signature.  Otherwise,
-	 * in case of signature removal, the signature data is in the buffer
-	 * we read in (as indicated by image->size), but we do *not* want to
-	 * checksum it.
-	 *
-	 * We also skip the 32-bits of checksum data in the PE/COFF header.
-	 */
-	checksum = csum_bytes(0, image->buf,
-			(void *)image->checksum - (void *)image->buf);
+	checksum = csum_bytes(0, image->buf, image->checksum_offset);
 	checksum = csum_bytes(checksum,
-			image->checksum + 1,
-			(void *)(image->buf + image->data_size) -
-			(void *)(image->checksum + 1));
+			image->buf + image->checksum_offset + sizeof(checksum),
+			image->size - image->checksum_offset
+				- sizeof(checksum));
 
-	if (is_signed) {
-		checksum = csum_bytes(checksum,
-				cert_table, sizeof(*cert_table));
+	checksum += image->size;
 
-		checksum = csum_bytes(checksum, image->sigbuf, image->sigsize);
+	*(uint32_t *)(image->buf + image->checksum_offset)
+			= cpu_to_le32(checksum);
+}
+
+static int image_iterate_sections(struct image *image,
+		int (*it)(struct image *,
+			struct external_scnhdr *, int, void *),
+		void *arg)
+{
+	struct external_scnhdr *scnhdr;
+	unsigned int i;
+	int rc;
+
+	for (i = 0; i < image->sections; i++) {
+		scnhdr = &image_scnhdr(image)[i];
+		rc = it(image, scnhdr, i, arg);
+		if (rc)
+			break;
 	}
 
-	checksum += image->data_size;
-
-	if (is_signed)
-		checksum += sizeof(*cert_table) + image->sigsize;
-
-	*(image->checksum) = cpu_to_le32(checksum);
+	return rc;
 }
 
 static int image_pecoff_parse(struct image *image)
 {
-	struct cert_table_header *cert_table;
+	struct external_PEI_IMAGE_hdr *pehdr;
+	struct external_PEI_DOS_hdr *doshdr;
 	char nt_sig[] = {'P', 'E', 0, 0};
 	size_t size = image->size;
 	int rc, cert_table_offset;
-	void *buf = image->buf;
 	uint16_t magic;
 	uint32_t addr;
 
 	/* sanity checks */
-	if (size < sizeof(*image->doshdr)) {
+	if (size < sizeof(*doshdr)) {
 		fprintf(stderr, "file is too small for DOS header\n");
 		return -1;
 	}
 
-	image->doshdr = buf;
+	doshdr = image_doshdr(image);
 
-	if (image->doshdr->e_magic[0] != 0x4d
-			|| image->doshdr->e_magic[1] != 0x5a) {
+	if (doshdr->e_magic[0] != 0x4d || doshdr->e_magic[1] != 0x5a) {
 		fprintf(stderr, "Invalid DOS header magic\n");
 		return -1;
 	}
 
-	addr = pehdr_u32(image->doshdr->e_lfanew);
+	addr = pehdr_u32(doshdr->e_lfanew);
 	if (addr >= image->size) {
 		fprintf(stderr, "pehdr is beyond end of file [0x%08x]\n",
 				addr);
 		return -1;
 	}
 
-	if (addr + sizeof(*image->pehdr) > image->size) {
+	if (addr + sizeof(*pehdr) > image->size) {
 		fprintf(stderr, "File not large enough to contain pehdr\n");
 		return -1;
 	}
 
-	image->pehdr = buf + addr;
-	if (memcmp(image->pehdr->nt_signature, nt_sig, sizeof(nt_sig))) {
+	image->pehdr_offset = addr;
+	pehdr = image_pehdr(image);
+
+	if (memcmp(pehdr->nt_signature, nt_sig, sizeof(nt_sig))) {
 		fprintf(stderr, "Invalid PE header signature\n");
 		return -1;
 	}
 
-	/* a.out header directly follows PE header */
-	image->opthdr.addr = image->pehdr + 1;
-	magic = pehdr_u16(image->pehdr->f_magic);
+	magic = pehdr_u16(pehdr->f_magic);
 
 	if (magic == IMAGE_FILE_MACHINE_AMD64) {
 		rc = image_pecoff_parse_64(image);
@@ -251,8 +340,8 @@ static int image_pecoff_parse(struct image *image)
 	/* the optional header has a variable size, as the data directory
 	 * has a variable number of entries. Ensure that the we have enough
 	 * space to include the security directory entry */
-	image->opthdr_size = pehdr_u16(image->pehdr->f_opthdr);
-	cert_table_offset = sizeof(*image->data_dir) *
+	image->opthdr_size = pehdr_u16(pehdr->f_opthdr);
+	cert_table_offset = sizeof(struct data_dir_entry) *
 				(DATA_DIR_CERT_TABLE + 1);
 
 	if (image->opthdr_size < image->opthdr_min_size + cert_table_offset) {
@@ -263,76 +352,122 @@ static int image_pecoff_parse(struct image *image)
 		return -1;
 	}
 
-
-	image->data_dir_sigtable = &image->data_dir[DATA_DIR_CERT_TABLE];
-
-	if (image->size < sizeof(*image->doshdr) + sizeof(*image->pehdr)
-			+ image->opthdr_size) {
+	if (image->size < sizeof(*doshdr) + sizeof(*pehdr) +
+			image->opthdr_size) {
 		fprintf(stderr, "file is too small for a.out header\n");
 		return -1;
 	}
 
-	image->cert_table_size = image->data_dir_sigtable->size;
-	if (image->cert_table_size)
-		cert_table = buf + image->data_dir_sigtable->addr;
-	else
-		cert_table = NULL;
+	image->sections = pehdr_u16(pehdr->f_nscns);
 
-	image->cert_table = cert_table;
-
-	/* if we have a valid cert table header, populate sigbuf as a shadow
-	 * copy of the cert table */
-	if (cert_table && cert_table->revision == CERT_TABLE_REVISION &&
-			cert_table->type == CERT_TABLE_TYPE_PKCS &&
-			cert_table->size < size) {
-		image->sigsize = cert_table->size - sizeof(*cert_table);
-		image->sigbuf = talloc_memdup(image,
-				(void *)(cert_table) + sizeof(*cert_table),
-				image->sigsize);
+	/* ensure we have space for the full section table */
+	if (image->size < image_scnhdr_offset(image) +
+			image->sections * sizeof(struct external_scnhdr)) {
+		fprintf(stderr, "file is too small for section table\n");
+		return -1;
 	}
-
-	image->sections = pehdr_u16(image->pehdr->f_nscns);
-	image->scnhdr = image->opthdr.addr + image->opthdr_size;
 
 	return 0;
 }
 
-static int align_up(int size, int align)
+static unsigned int align_up(int size, int align)
 {
 	return (size + align - 1) & ~(align - 1);
+}
+
+static unsigned int pad_len(int size, int align)
+{
+	return align_up(size, align) - size;
 }
 
 static int cmp_regions(const void *p1, const void *p2)
 {
 	const struct region *r1 = p1, *r2 = p2;
 
-	if (r1->data < r2->data)
+	if (r1->offset < r2->offset)
 		return -1;
-	if (r1->data > r2->data)
+	if (r1->offset > r2->offset)
 		return 1;
 	return 0;
 }
 
-static void set_region_from_range(struct region *region, void *start, void *end)
+static void set_region_from_range(struct region *region,
+		unsigned int start_offset, unsigned int end_offset)
 {
-	region->data = start;
-	region->size = end - start;
+	region->offset = start_offset;
+	region->size = end_offset - start_offset;
 }
 
-static int image_find_regions(struct image *image)
+struct add_ctx {
+	int *gap_warn;
+	size_t *bytes;
+};
+
+static int add_section_region(struct image *image,
+		struct external_scnhdr *scnhdr, int i, void *arg)
 {
-	struct region *regions, *r;
-	void *buf = image->buf;
-	int i, gap_warn;
-	size_t bytes;
+	uint32_t file_offset, file_size;
+	struct add_ctx *add_ctx = arg;
+	struct region *regions;
+
+	file_offset = pehdr_u32(scnhdr->s_scnptr);
+	file_size = pehdr_u32(scnhdr->s_size);
+
+	if (!file_size)
+		return 0;
+
+	image->n_checksum_regions++;
+	image->checksum_regions = talloc_realloc(image,
+			image->checksum_regions,
+			struct region,
+			image->n_checksum_regions);
+	regions = image->checksum_regions;
+
+	regions[i+3].offset = file_offset;
+	regions[i+3].size = align_up(file_size, image->file_alignment);
+	regions[i+3].name = talloc_strndup(image->checksum_regions,
+				scnhdr->s_name, 8);
+	*add_ctx->bytes += regions[i+3].size;
+
+	if (regions[i+3].offset + regions[i+3].size > image->size) {
+		fprintf(stderr, "warning: file-aligned section %s "
+				"extends beyond end of file\n",
+				regions[i+3].name);
+	}
+
+	if (regions[i+2].offset + regions[i+2].size != regions[i+3].offset) {
+		fprintf(stderr, "warning: gap in section table:\n");
+		fprintf(stderr, "    %-8s: 0x%08x - 0x%08x,\n",
+				regions[i+2].name,
+				regions[i+2].offset,
+				regions[i+2].offset +
+					regions[i+2].size);
+		fprintf(stderr, "    %-8s: 0x%08x - 0x%08x,\n",
+				regions[i+3].name,
+				regions[i+3].offset,
+				regions[i+3].offset +
+					regions[i+3].size);
+
+
+		*add_ctx->gap_warn = 1;
+	}
+	return 0;
+}
+
+static int image_find_regions(struct image *image,
+		unsigned int *data_size)
+{
+	struct data_dir_entry *data_dir_entry;
+	size_t bytes, sig_bytes;
+	struct region *regions;
+	struct add_ctx add_ctx;
+	int gap_warn;
 
 	gap_warn = 0;
-
-	/* now we know where the checksum and cert table data is, we can
-	 * construct regions that need to be signed */
 	bytes = 0;
-	image->n_checksum_regions = 0;
-	image->checksum_regions = NULL;
+
+	if (image->checksum_regions)
+		talloc_free(image->checksum_regions);
 
 	image->n_checksum_regions = 3;
 	image->checksum_regions = talloc_zero_array(image,
@@ -341,77 +476,33 @@ static int image_find_regions(struct image *image)
 
 	/* first region: beginning to checksum field */
 	regions = image->checksum_regions;
-	set_region_from_range(&regions[0], buf, image->checksum);
+	set_region_from_range(&regions[0], 0, image->checksum_offset);
 	regions[0].name = "begin->cksum";
 	bytes += regions[0].size;
 
-	bytes += sizeof(*image->checksum);
+	bytes += sizeof(uint32_t);
 
 	/* second region: end of checksum to certificate table entry */
 	set_region_from_range(&regions[1],
-			image->checksum + 1,
-			image->data_dir_sigtable
-			);
+			image->checksum_offset + sizeof(uint32_t),
+			image_data_dir_cert_table_offset(image));
 	regions[1].name = "cksum->datadir[CERT]";
 	bytes += regions[1].size;
 
 	bytes += sizeof(struct data_dir_entry);
+
 	/* third region: end of checksum to end of headers */
 	set_region_from_range(&regions[2],
-				(void *)image->data_dir_sigtable
-					+ sizeof(struct data_dir_entry),
-				buf + image->header_size);
+			image_data_dir_cert_table_offset(image)
+				+ sizeof(struct data_dir_entry),
+			image->header_size);
 	regions[2].name = "datadir[CERT]->headers";
 	bytes += regions[2].size;
 
 	/* add COFF sections */
-	for (i = 0; i < image->sections; i++) {
-		uint32_t file_offset, file_size;
-
-		file_offset = pehdr_u32(image->scnhdr[i].s_scnptr);
-		file_size = pehdr_u32(image->scnhdr[i].s_size);
-
-		if (!file_size)
-			continue;
-
-		image->n_checksum_regions++;
-		image->checksum_regions = talloc_realloc(image,
-				image->checksum_regions,
-				struct region,
-				image->n_checksum_regions);
-		regions = image->checksum_regions;
-
-		regions[i + 3].data = buf + file_offset;
-		regions[i + 3].size = align_up(file_size,
-					image->file_alignment);
-		regions[i + 3].name = talloc_strndup(image->checksum_regions,
-					image->scnhdr[i].s_name, 8);
-		bytes += regions[i + 3].size;
-
-		if (file_offset + regions[i+3].size > image->size) {
-			fprintf(stderr, "warning: file-aligned section %s "
-					"extends beyond end of file\n",
-					regions[i+3].name);
-		}
-
-		if (regions[i+2].data + regions[i+2].size
-				!= regions[i+3].data) {
-			fprintf(stderr, "warning: gap in section table:\n");
-			fprintf(stderr, "    %-8s: 0x%08tx - 0x%08tx,\n",
-					regions[i+2].name,
-					regions[i+2].data - buf,
-					regions[i+2].data +
-						regions[i+2].size - buf);
-			fprintf(stderr, "    %-8s: 0x%08tx - 0x%08tx,\n",
-					regions[i+3].name,
-					regions[i+3].data - buf,
-					regions[i+3].data +
-						regions[i+3].size - buf);
-
-
-			gap_warn = 1;
-		}
-	}
+	add_ctx.bytes = &bytes;
+	add_ctx.gap_warn = &gap_warn;
+	image_iterate_sections(image, add_section_region, &add_ctx);
 
 	if (gap_warn)
 		fprintf(stderr, "gaps in the section table may result in "
@@ -420,7 +511,10 @@ static int image_find_regions(struct image *image)
 	qsort(image->checksum_regions, image->n_checksum_regions,
 			sizeof(struct region), cmp_regions);
 
-	if (bytes + image->cert_table_size < image->size) {
+	data_dir_entry = image_data_dir_cert_table(image);
+	sig_bytes = data_dir_entry->addr ? data_dir_entry->size : 0;
+
+	if (bytes + sig_bytes < image->size) {
 		int n = image->n_checksum_regions++;
 		struct region *r;
 
@@ -430,45 +524,51 @@ static int image_find_regions(struct image *image)
 				image->n_checksum_regions);
 		r = &image->checksum_regions[n];
 		r->name = "endjunk";
-		r->data = image->buf + bytes;
-		r->size = image->size - bytes - image->cert_table_size;
+		r->offset = bytes;
+		r->size = image->size - bytes - sig_bytes;
 
 		fprintf(stderr, "warning: data remaining[%zd vs %zd]: gaps "
 				"between PE/COFF sections?\n",
-				bytes + image->cert_table_size, image->size);
-	} else if (bytes + image->cert_table_size > image->size) {
-		fprintf(stderr, "warning: checksum areas are greater than "
-				"image size. Invalid section table?\n");
+				bytes + sig_bytes, image->size);
+
+		bytes += r->size;
+	} else if (bytes + sig_bytes > image->size) {
+		fprintf(stderr, "warning: checksum areas (%zd,%zd) are greater than "
+				"image size (%zd). Invalid section table?\n",
+				bytes, sig_bytes, image->size);
 	}
 
 	/* record the size of non-signature data */
-	r = &image->checksum_regions[image->n_checksum_regions - 1];
-	image->data_size = (r->data - (void *)image->buf) + r->size;
+	if (data_size)
+		*data_size = bytes;
 
 	return 0;
 }
 
 struct image *image_load(const char *filename)
 {
+	unsigned int data_size;
 	struct image *image;
+	uint8_t *buf;
 	int rc;
 
-	image = talloc(NULL, struct image);
+	image = talloc_zero(NULL, struct image);
 	if (!image) {
 		perror("talloc(image)");
 		return NULL;
 	}
 
-	rc = fileio_read_file(image, filename, &image->buf, &image->size);
+	rc = fileio_read_file(image, filename, &buf, &image->size);
 	if (rc)
 		goto err;
 
-reparse:
+	image->buf = buf;
+
 	rc = image_pecoff_parse(image);
 	if (rc)
 		goto err;
 
-	rc = image_find_regions(image);
+	rc = image_find_regions(image, &data_size);
 	if (rc)
 		goto err;
 
@@ -478,25 +578,37 @@ reparse:
 	 * but we can improve our chances that the verification hash will
 	 * succeed by padding the image out to the aligned size, and including
 	 * the pad in the signed data.
-	 *
-	 * In this case, do a realloc, but that may peturb the addresses that
-	 * we've calculated during the pecoff parsing, so we need to redo that
-	 * too.
 	 */
-	if (image->data_size > image->size) {
+	if (data_size > image->size) {
 		image->buf = talloc_realloc(image, image->buf, uint8_t,
-				image->data_size);
-		memset(image->buf + image->size, 0,
-				image->data_size - image->size);
-		image->size = image->data_size;
-
-		goto reparse;
+				data_size);
+		memset(image->buf + image->size, 0, data_size - image->size);
+		image->size = data_size;
 	}
 
 	return image;
 err:
 	talloc_free(image);
 	return NULL;
+}
+
+void image_pad_for_signing(struct image *image)
+{
+	size_t padded_size;
+
+	padded_size = align_up(image->size, IMAGE_ALIGN);
+	if (padded_size == image->size)
+		return;
+
+	image->buf = talloc_realloc(image, image->buf, uint8_t, padded_size);
+	memset(image->buf + image->size, 0, padded_size - image->size);
+	image->size = padded_size;
+
+	/* we'll need to include the image in the checksum regions, so
+	 * recalculate */
+	image_find_regions(image, NULL);
+
+	return;
 }
 
 int image_hash_sha256(struct image *image, uint8_t digest[])
@@ -514,7 +626,8 @@ int image_hash_sha256(struct image *image, uint8_t digest[])
 	for (i = 0; i < image->n_checksum_regions; i++) {
 		region = &image->checksum_regions[i];
 		n += region->size;
-		rc = SHA256_Update(&ctx, region->data, region->size);
+		rc = SHA256_Update(&ctx, image->buf + region->offset,
+					region->size);
 		if (!rc)
 			return -1;
 	}
@@ -527,30 +640,78 @@ int image_hash_sha256(struct image *image, uint8_t digest[])
 void image_print_regions(struct image *image)
 {
 	struct region *region;
-	void *buf;
 	int i;
 
 	for (i = 0; i < image->n_checksum_regions; i++) {
 		region = &image->checksum_regions[i];
-		buf = image->buf;
 
-		printf("sum region  0x%04lx -> 0x%04lx [0x%04x bytes] %s\n",
-				region->data - buf,
-				region->data - buf - 1 + region->size,
+		printf("sum region  0x%04x -> 0x%04x [0x%04x bytes] %s\n",
+				region->offset,
+				region->offset + region->size - 1,
 				region->size,
 				region->name);
 	}
 }
 
-int image_add_signature(struct image *image, void *sig, int size)
+int image_add_signature(struct image *image, void *sig, unsigned int size)
 {
-	/* we only support one signature at present */
-	if (image->sigbuf) {
-		fprintf(stderr, "warning: overwriting existing signature\n");
-		talloc_free(image->sigbuf);
+	unsigned int data_size, cert_table_size, pad, len;
+	struct data_dir_entry *data_dir_cert_table;
+	struct cert_table_header *cert_table;
+
+	/* we lay out the signed image as follows:
+	 *
+	 * +-------------------+
+	 * | image data        |
+	 * +-------------------+
+	 * | pad to 8 bytes    |
+	 * +-------------------+
+	 * | cert table header |
+	 * +-------------------+
+	 * | signature         |
+	 * +--+----------------+
+	 * |  | pad to 8 bytes |
+	 * +--+----------------+
+	 *
+	 * The first chunk of padding should always be present, as the image
+	 * will have been processed with image_pad_for_signing().
+	 *
+	 * The last chunk of padding is included in the size of the
+	 * certificate table as specificed by the PE/COFF data directory.
+	 * However, the header on the certificate table does not include
+	 * this padding.
+	 */
+
+	data_size = image_data_size(image);
+	assert(align_up(data_size, IMAGE_ALIGN) == data_size);
+
+	cert_table_size = sizeof(struct cert_table_header) + size;
+	pad = pad_len(cert_table_size, IMAGE_ALIGN);
+
+	len = data_size + cert_table_size + pad;
+
+	if (image->size != len) {
+		image->buf = talloc_realloc(image, image->buf, uint8_t, len);
+		image->size = len;
 	}
-	image->sigbuf = sig;
-	image->sigsize = size;
+
+	/* construct the data directory */
+	data_dir_cert_table = image_data_dir_cert_table(image);
+	data_dir_cert_table->addr = data_size;
+	data_dir_cert_table->size = cert_table_size + pad;
+
+	cert_table = image_cert_table(image);
+	/* we just put it there! */
+	assert(cert_table);
+
+	cert_table->size = cert_table_size;
+	cert_table->revision = CERT_TABLE_REVISION;
+	cert_table->type = CERT_TABLE_TYPE_PKCS;
+
+	memcpy((void *)(cert_table + 1), sig, size);
+
+	image_pecoff_update_checksum(image);
+
 	return 0;
 }
 
@@ -564,63 +725,7 @@ void image_remove_signature(struct image *image)
 
 int image_write(struct image *image, const char *filename)
 {
-	struct cert_table_header cert_table_header;
-	int fd, rc, len, padlen;
-	bool is_signed;
-	uint8_t pad[8];
-
-	is_signed = image->sigbuf && image->sigsize;
-	padlen = 0;
-
-	/* optionally update the image to contain signature data */
-	if (is_signed) {
-		cert_table_header.size = image->sigsize +
-						sizeof(cert_table_header);
-		cert_table_header.revision = CERT_TABLE_REVISION;
-		cert_table_header.type = CERT_TABLE_TYPE_PKCS;
-
-		len = sizeof(cert_table_header) + image->sigsize;
-
-		/* pad to sizeof(pad)-byte boundary */
-		padlen = align_up(len, sizeof(pad)) - len;
-
-		image->data_dir_sigtable->addr = image->data_size;
-		image->data_dir_sigtable->size = len + padlen;
-	} else {
-		image->data_dir_sigtable->addr = 0;
-		image->data_dir_sigtable->size = 0;
-	}
-
-	image_pecoff_update_checksum(image, &cert_table_header);
-
-	fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	if (fd < 0) {
-		perror("open");
-		return -1;
-	}
-
-	rc = write_all(fd, image->buf, image->data_size);
-	if (!rc)
-		goto out;
-	if (!is_signed)
-		goto out;
-
-	rc = write_all(fd, &cert_table_header, sizeof(cert_table_header));
-	if (!rc)
-		goto out;
-
-	rc = write_all(fd, image->sigbuf, image->sigsize);
-	if (!rc)
-		goto out;
-
-	if (padlen) {
-		memset(pad, 0, sizeof(pad));
-		rc = write_all(fd, pad, padlen);
-	}
-
-out:
-	close(fd);
-	return !rc;
+	return fileio_write_file(filename, image->buf, image->size);
 }
 
 int image_write_detached(struct image *image, const char *filename)

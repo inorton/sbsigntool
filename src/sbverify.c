@@ -160,18 +160,7 @@ static void print_certificate_store_certs(X509_STORE *certs)
 static int load_image_signature_data(struct image *image,
 		uint8_t **buf, size_t *len)
 {
-	struct cert_table_header *header;
-
-	if (!image->data_dir_sigtable->addr
-			|| !image->data_dir_sigtable->size) {
-		fprintf(stderr, "No signature table present\n");
-		return -1;
-	}
-
-	header = (void *)image->buf + image->data_dir_sigtable->addr;
-	*buf = (void *)(header + 1);
-	*len = header->size - sizeof(*header);
-	return 0;
+	return image_signature(image, (void **)buf, len);
 }
 
 static int load_detached_signature_data(struct image *image,

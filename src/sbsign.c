@@ -194,6 +194,10 @@ int main(int argc, char **argv)
 
 	const EVP_MD *md = EVP_get_digestbyname("SHA256");
 
+	/* We align the signature on an 8-byte boundary. We need to allocate
+	 * this now, as the padding will be included in the signature hash */
+	image_pad_for_signing(ctx->image);
+
 	if (ctx->verbose) {
 		printf("Image checksum regions:\n");
 		image_print_regions(ctx->image);

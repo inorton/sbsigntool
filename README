@@ -6,6 +6,8 @@ sbsigntool - Signing utility for UEFI secure boot
   are permitted in any medium without royalty provided the copyright
   notice and this notice are preserved.
 
+Before you start, make sure you have libssl-dev, gnu-efi and help2man installed
+
 See file ./INSTALL for building and installation instructions.
 
 Main git repository:

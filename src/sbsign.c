@@ -48,6 +48,7 @@
 #include <openssl/evp.h>
 #include <openssl/asn1.h>
 #include <openssl/asn1t.h>
+#include <openssl/engine.h>
 
 #include <ccan/talloc/talloc.h>
 
@@ -61,6 +62,7 @@ struct sign_context {
 	struct image *image;
 	const char *infilename;
 	const char *outfilename;
+	const char *engine;
 	int verbose;
 	int detached;
 };
@@ -69,6 +71,7 @@ static struct option options[] = {
 	{ "output", required_argument, NULL, 'o' },
 	{ "cert", required_argument, NULL, 'c' },
 	{ "key", required_argument, NULL, 'k' },
+	{ "engine", required_argument, NULL, 'e' },
 	{ "detached", no_argument, NULL, 'd' },
 	{ "verbose", no_argument, NULL, 'v' },
 	{ "help", no_argument, NULL, 'h' },
@@ -84,6 +87,7 @@ static void usage(void)
 		"Options:\n"
 		"\t--key <keyfile>    signing key (PEM-encoded RSA "
 						"private key)\n"
+		"\t--engine <engine>  Optionally use this OpenSSL engine\n"
 		"\t--cert <certfile>  certificate (x509 certificate)\n"
 		"\t--detached         write a detached signature, instead of\n"
 		"\t                    a signed binary\n"
@@ -116,14 +120,16 @@ int main(int argc, char **argv)
 	uint8_t *buf, *tmp;
 	int rc, c, sigsize;
 
+
 	ctx = talloc_zero(NULL, struct sign_context);
 
 	keyfilename = NULL;
 	certfilename = NULL;
 
+
 	for (;;) {
 		int idx;
-		c = getopt_long(argc, argv, "o:c:k:dvVh", options, &idx);
+		c = getopt_long(argc, argv, "o:c:k:dvVhe:", options, &idx);
 		if (c == -1)
 			break;
 
@@ -136,6 +142,9 @@ int main(int argc, char **argv)
 			break;
 		case 'k':
 			keyfilename = optarg;
+			break;
+		case 'e':
+			ctx->engine = optarg;
 			break;
 		case 'd':
 			ctx->detached = 1;
@@ -183,6 +192,20 @@ int main(int argc, char **argv)
 	ERR_load_crypto_strings();
 	OpenSSL_add_all_digests();
 	OpenSSL_add_all_ciphers();
+	
+	if (ctx->engine) {
+		ENGINE *eng;
+		ENGINE_load_builtin_engines();
+		eng = ENGINE_by_id(ctx->engine);
+		if (!eng) {
+			fprintf(stderr,
+				"error: could not load engine %s\n", ctx->engine);
+			fprintf(stderr,
+				"check LD_LIBRARY_PATH?\n");
+			return EXIT_FAILURE;
+		}
+		ENGINE_set_default_RSA(eng);
+	}
 
 	EVP_PKEY *pkey = fileio_read_pkey(keyfilename);
 	if (!pkey)
